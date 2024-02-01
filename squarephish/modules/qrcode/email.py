@@ -18,8 +18,29 @@ import pyqrcode  # type: ignore
 from configparser import ConfigParser
 from email.message import EmailMessage
 from email.mime.image import MIMEImage
+from PIL import Image
+from itertools import product
 from squarephish.modules.emailer import Emailer
+import io
 
+def split_image(img_bytes):
+    # Open the image
+    img = Image.open(io.BytesIO(img_bytes))
+
+    # Get the width and height of the image
+    width, height = img.size
+
+    # Calculate the midpoint to split the image into two halves
+    midpoint = width // 2
+
+    # Crop the image into two halves
+    half1 = img.crop((0, 0, midpoint, height))
+    half2 = img.crop((midpoint, 0, width, height))
+    img_byte_arr1 = io.BytesIO()
+    half1.save(img_byte_arr1, format='PNG')
+    img_byte_arr2 = io.BytesIO()
+    half2.save(img_byte_arr2, format='PNG')
+    return img_byte_arr1.getvalue(),img_byte_arr2.getvalue()
 
 class QRCodeEmail:
     """Class to handle initial QR code emails"""
@@ -51,8 +72,10 @@ class QRCodeEmail:
             qrcode_bytes = io.BytesIO()
             qrcode.png(qrcode_bytes, scale=6)
 
+            
+            half1,half2 = split_image(qrcode_bytes.getvalue())
             # Return the QR code bytes
-            return qrcode_bytes.getvalue()
+            return half1,half2
 
         except Exception as e:
             logging.error(f"Error generating QR code: {e}")
@@ -73,7 +96,7 @@ class QRCodeEmail:
         :param emailer: emailer object to send emails
         :returns:       bool if the email was successfully sent
         """
-        qrcode = cls._generate_qrcode(
+        q1,q2 = cls._generate_qrcode(
             cls,
             config.get("EMAIL", "SQUAREPHISH_SERVER"),
             config.get("EMAIL", "SQUAREPHISH_PORT"),
@@ -82,7 +105,7 @@ class QRCodeEmail:
             url,
         )
 
-        if not qrcode:
+        if not q1:
             logging.error("Failed to generate QR code")
             return False
 
@@ -92,16 +115,19 @@ class QRCodeEmail:
         msg["Subject"] = config.get("EMAIL", "SUBJECT")
 
         email_template = config.get("EMAIL", "EMAIL_TEMPLATE")
-        msg.set_content(email_template, subtype="html")
+        msg.set_content("", subtype="html")
         msg.add_alternative(email_template, subtype="html")
 
         # Create a new MIME image to embed into the email as inline
-        logo = MIMEImage(qrcode)
-        logo.add_header("Content-ID", f"<qrcode.png>")  # <img src"cid:qrcode.png">
-        logo.add_header("X-Attachment-Id", "qrcode.png")
-        logo["Content-Disposition"] = f"inline; filename=qrcode.png"
-
-        msg.get_payload()[1].make_mixed()
-        msg.get_payload()[1].attach(logo)
-
+        logo = MIMEImage(q1)
+        logo.add_header("Content-ID", f"<q1.png>")  # <img src"cid:qrcode.png">
+        logo.add_header("X-Attachment-Id", "q1.png")
+        logo["Content-Disposition"] = f"inline; filename=q1.png"
+        logo2 = MIMEImage(q2)
+        logo2.add_header("Content-ID", f"<q2.png>")  # <img src"cid:qrcode.png">
+        logo2.add_header("X-Attachment-Id", "q2.png")
+        logo2["Content-Disposition"] = f"inline; filename=q2.png"
+        msg.get_payload()[0].make_mixed()
+        msg.get_payload()[0].attach(logo)
+        msg.get_payload()[0].attach(logo2)
         return emailer.send_email(msg)
